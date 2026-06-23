@@ -22,7 +22,7 @@ pub struct MinilinkServerHandler {
 
 fn log(message: String, instant: Instant) -> String {
     let elapsed = instant.elapsed().as_millis().to_string();
-    format!("[{elapsed}]: {message}")
+    format!("[{elapsed}]: {message}\n")
 }
 impl MinilinkServerHandler {
     pub async fn new(
@@ -32,14 +32,15 @@ impl MinilinkServerHandler {
         der_path: String,
         logfile_path: String,
         log: bool,
+        password: String,
     ) -> Self {
         let der = std::fs::read(&p12_path).unwrap();
-        let certificate = Identity::from_pkcs12(der.as_slice(), "").unwrap();
+        let certificate = Identity::from_pkcs12(der.as_slice(), &password).unwrap();
 
         let tcp_listener = TcpListener::bind(&address).await.unwrap();
 
         if log {
-            fs::write(&logfile_path, "MinilinkServer created").unwrap();
+            fs::write(&logfile_path, "MinilinkServer created\n").unwrap();
         }
 
         MinilinkServerHandler {
@@ -55,6 +56,7 @@ impl MinilinkServerHandler {
     }
 
     pub async fn start(&self) {
+        fs::write(&self.logfile_path, "MinilinkServer started\n").unwrap();
         let start = Instant::now();
         let ca_der = std::fs::read(self.der_path.clone()).expect("Failed to read CA cert");
         let client_ca = Certificate::from_der(&ca_der).expect("Failed to parse CA cert");
@@ -75,7 +77,7 @@ impl MinilinkServerHandler {
             while let Ok(Some(line)) = reader.next_line().await {
                 let command = line.trim();
                 match command {
-                    "status" => println!("Server is running fine."),
+                    "status" => println!("Server ok"),
                     "exit" => {
                         println!("Shutting down server...");
                         std::process::exit(0);
@@ -190,10 +192,11 @@ impl MinilinkClientHandler {
         server_domain: String,
         client_p12_path: String,
         server_ca_path: String,
+        password: String,
     ) -> Self {
         let p12_der = fs::read(&client_p12_path).expect("Failed to read client .p12 file");
         let client_cert =
-            Identity::from_pkcs12(&p12_der, "").expect("Failed to parse client identity");
+            Identity::from_pkcs12(&p12_der, &password).expect("Failed to parse client identity");
 
         MinilinkClientHandler {
             server_address,
@@ -213,13 +216,14 @@ impl MinilinkClientHandler {
         let mut connector_builder = TlsConnector::builder();
         connector_builder
             .identity(self.client_cert.clone())
-            .add_root_certificate(server_ca);
+            .add_root_certificate(server_ca)
+            .danger_accept_invalid_certs(true);
 
         let native_connector = connector_builder.build().unwrap();
         let tls_connector = tokio_native_tls::TlsConnector::from(native_connector);
 
         let tcp_stream = TcpStream::connect(&self.server_address).await.unwrap();
-        
+
         // Complete the TLS Handshake
         let mut tls_stream = tls_connector
             .connect(&self.server_domain, tcp_stream)
@@ -230,7 +234,7 @@ impl MinilinkClientHandler {
         // FIXED LOGIC BUG: Send the API key your server requires immediately
         // before splitting the stream, otherwise the server hangs/drops connection.
         tls_stream
-            .write_all(b"EXPECTED_SECRET_API_KEY")
+            .write_all(b"CONNECTED")
             .await
             .unwrap();
         tls_stream.flush().await.unwrap();
