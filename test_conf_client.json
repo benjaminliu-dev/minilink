@@ -1,0 +1,12 @@
+{
+  "mode": "client",
+  "address": "127.0.0.1:8000",
+  "blocked_addresses": [
+    "127.0.0.2:8000"
+  ],
+  "logfile_path": "minilink.log",
+  "log": true,
+  "domain": "localhost",
+  "password": "cs2060684",
+  "entry_message": "CLIENT_CONNECTED"
+}

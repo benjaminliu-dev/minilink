@@ -1,13 +1,14 @@
+use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs::OpenOptions;
 use tokio::io;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
-use tokio_native_tls::native_tls::{
-    Certificate, Identity, TlsAcceptor, TlsAcceptorBuilder, TlsConnector,
-};
+use tokio::sync::{Mutex, broadcast};
+use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector};
 
 pub struct MinilinkServerHandler {
     pub address: String,
@@ -17,12 +18,16 @@ pub struct MinilinkServerHandler {
     pub logfile_path: String,
     pub log: bool,
     pub tcp_listener: TcpListener,
-    pub connected_addresses: Vec<String>,
+    pub connected_addresses: Arc<Mutex<Vec<String>>>,
 }
 
-fn log(message: String, instant: Instant) -> String {
-    let elapsed = instant.elapsed().as_millis().to_string();
-    format!("[{elapsed}]: {message}\n")
+fn log(message: String, instant: Instant, address: &str, name: Option<&str>) -> String {
+    let elapsed = instant.elapsed().as_secs().to_string();
+    if name.is_none() {
+        return format!("[{elapsed}]: {address}: {message}\n");
+    } else {
+        return format!("[{elapsed}]: {address}:{}: {message}\n", name.unwrap());
+    }
 }
 impl MinilinkServerHandler {
     pub async fn new(
@@ -51,24 +56,26 @@ impl MinilinkServerHandler {
             logfile_path,
             log,
             tcp_listener,
-            connected_addresses: vec![],
+            connected_addresses: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub async fn start(&self) {
         fs::write(&self.logfile_path, "MinilinkServer started\n").unwrap();
         let start = Instant::now();
-        let ca_der = std::fs::read(self.der_path.clone()).expect("Failed to read CA cert");
-        let client_ca = Certificate::from_der(&ca_der).expect("Failed to parse CA cert");
 
         let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
             TlsAcceptor::builder(self.cert.clone()).build().unwrap(),
         );
         let (tx, _rx) = broadcast::channel::<String>(16);
 
-        let tx_clone = tx.clone();
+        let connected_addresses = Arc::clone(&self.connected_addresses);
+        let console_connected_addresses = Arc::clone(&connected_addresses);
+        let names = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+        let names_for_console = Arc::clone(&names);
+        let logfile_path_for_console = self.logfile_path.clone();
 
-        tokio::spawn(async {
+        tokio::spawn(async move {
             let stdin = io::stdin();
             let mut reader = BufReader::new(stdin).lines();
 
@@ -78,10 +85,43 @@ impl MinilinkServerHandler {
                 let command = line.trim();
                 match command {
                     "status" => println!("Server ok"),
+                    "connections" => {
+                        let connections = console_connected_addresses.lock().await;
+                        let names_map = names_for_console.lock().await;
+                        let formatted = connections
+                            .iter()
+                            .map(|addr| {
+                                if let Some(name) = names_map.get(addr) {
+                                    format!("{addr}: {name}")
+                                } else {
+                                    addr.clone()
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        println!("{:?}", formatted)
+                    },
                     "exit" => {
                         println!("Shutting down server...");
                         std::process::exit(0);
+                    },
+                    
+                    "help" => {
+                        println!("Available commands:");
+                        println!("status - Check server status");
+                        println!("connections - List connected clients");
+                        println!("exit - Shut down the server");
+                        println!("help - Show this help message");
+                        println!("save_log - Save the current log to saved.log");
+                    },
+
+                    "save_log" => {
+                        let src = logfile_path_for_console.clone();
+                        tokio::spawn(async move {
+                            let _ = tokio::fs::copy(src, "saved.log").await;
+                            println!("Log saved to saved.log");
+                        });
                     }
+    
                     _ => println!("Unknown command: {}", command),
                 }
             }
@@ -92,7 +132,12 @@ impl MinilinkServerHandler {
             let should_log = self.log;
             let (sock, remote_addr) = self.tcp_listener.accept().await.unwrap();
             let tls_acceptor = tls_acceptor.clone();
-            let mut client_rx = tx.subscribe();
+            let broadcast_tx = tx.clone();
+            let mut client_rx = broadcast_tx.subscribe();
+            let tracked_connections = Arc::clone(&connected_addresses);
+            let console_connections = Arc::clone(&connected_addresses);
+            let shared_names = Arc::clone(&names);
+            let client_id = remote_addr.to_string();
 
             // Log incoming connection asynchronously before spawning the client task
             if should_log {
@@ -104,7 +149,7 @@ impl MinilinkServerHandler {
                 {
                     let _ = file
                         .write_all(
-                            log(format!("Accepted connection from {remote_addr}"), start)
+                            log(format!("Accepted connection from {remote_addr}"), start, &remote_addr.to_string(), None)
                                 .as_bytes(),
                         )
                         .await;
@@ -113,7 +158,11 @@ impl MinilinkServerHandler {
 
             tokio::spawn(async move {
                 let tls_stream = match tls_acceptor.accept(sock).await {
-                    Ok(s) => s,
+                    Ok(s) => {
+                        let mut connections = tracked_connections.lock().await;
+                        connections.push(remote_addr.to_string());
+                        s
+                    }
                     Err(_) => {
                         if should_log {
                             if let Ok(mut file) = OpenOptions::new()
@@ -123,7 +172,7 @@ impl MinilinkServerHandler {
                             {
                                 let _ = file
                                     .write_all(
-                                        log(format!("TLS Accept error from {remote_addr}"), start)
+                                        log(format!("TLS Accept error from {remote_addr}"), start, &remote_addr.to_string(), None)
                                             .as_bytes(),
                                     )
                                     .await;
@@ -135,40 +184,82 @@ impl MinilinkServerHandler {
 
                 let (mut reader, mut writer) = tokio::io::split(tls_stream);
                 let mut buffer = [0; 1024];
-
                 loop {
                     tokio::select! {
                         // Event A: Client sends data
                         read_result = reader.read(&mut buffer) => {
                             match read_result {
                                 Ok(0) => {
+                                    let client_name = {
+                                        let names_map = shared_names.lock().await;
+                                        names_map.get(&client_id).cloned()
+                                    };
                                     // Log clean disconnection
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), start).as_bytes()).await;
+                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), start, &remote_addr.to_string(), client_name.as_deref()).as_bytes()).await;
                                         }
+                                    }
+                                    {
+                                        let address = remote_addr.to_string();
+                                        let mut connections = console_connections.lock().await;
+                                        connections.retain(|x| x != &address);
                                     }
                                     return;
                                 }
                                 Ok(n) => {
                                     let received = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
+                                    if let Some(name) = received.strip_prefix("setname ") {
+                                        let mut names_map = shared_names.lock().await;
+                                        names_map.insert(client_id.clone(), name.trim().to_string());
+                                        let _ = writer.write_all(log(format!("Name set to {name}"), start, &client_id, Some(name.trim())).as_bytes()).await;
+                                        continue;
+                                    }
+
+                                    if let Some(target) = received.strip_prefix("getname ") {
+                                        let names_map = shared_names.lock().await;
+                                        let target_name = names_map.get(target.trim()).cloned().unwrap_or_else(|| "unknown".to_string());
+                                        let _ = writer.write_all(log(format!("Name for {target}: {target_name}"), start, &client_id, None).as_bytes()).await;
+                                        continue;
+                                    }
+
+                                    let client_name = {
+                                        let names_map = shared_names.lock().await;
+                                        names_map.get(&client_id).cloned()
+                                    };
+
+                                    let broadcast_message = format!("{client_id}\t{received}");
+                                    let _ = broadcast_tx.send(broadcast_message);
                                     // Log the data received from the client
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(format!("Received from {remote_addr}: {received}"), start).as_bytes()).await;
+                                            let _ = file.write_all(log(received.clone(), start, &remote_addr.to_string(), client_name.as_deref()).as_bytes()).await;
                                         }
                                     }
                                 }
-                                Err(_) => return,
+                                Err(_) => {
+                                    let address = remote_addr.to_string();
+                                    let mut connections = console_connections.lock().await;
+                                    connections.retain(|x| x != &address);
+                                    return;
+                                }
                             }
                         }
 
-                        // Event B: Server broadcasts stdin data to this client
+                        // Event B: Server broadcasts incoming client data to this client
                         broadcast_result = client_rx.recv() => {
                             if let Ok(msg) = broadcast_result {
-                                if writer.write_all(msg.as_bytes()).await.is_err() {
-                                    return;
+                                if let Some((sender, payload)) = msg.split_once('\t') {
+                                    if sender == client_id {
+                                        continue;
+                                    }
+                                    let names_map = shared_names.lock().await;
+                                    let sender_name = names_map.get(sender).cloned().unwrap_or_else(|| sender.to_string());
+                                    let forwarded = format!("{sender_name}: {payload}\n");
+                                    if writer.write_all(forwarded.as_bytes()).await.is_err() {
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -184,7 +275,7 @@ pub struct MinilinkClientHandler {
     pub server_domain: String,
     pub client_cert: Identity,
     pub server_ca_path: String,
-    pub entry_message: String
+    pub entry_message: String,
 }
 
 impl MinilinkClientHandler {
@@ -194,7 +285,7 @@ impl MinilinkClientHandler {
         client_p12_path: String,
         server_ca_path: String,
         password: String,
-        entry_message: String
+        entry_message: String,
     ) -> Self {
         let p12_der = fs::read(&client_p12_path).expect("Failed to read client .p12 file");
         let client_cert =
@@ -205,7 +296,7 @@ impl MinilinkClientHandler {
             server_domain,
             client_cert,
             server_ca_path,
-            entry_message
+            entry_message,
         }
     }
 
@@ -252,6 +343,8 @@ impl MinilinkClientHandler {
                     Ok(n) => {
                         let msg = String::from_utf8_lossy(&buffer[..n]);
                         print!("{}", msg);
+                        print!("msg> ");
+                        let _ = std::io::stdout().flush();
                     }
                     Err(e) => {
                         println!("\nError reading from server: {}", e);
@@ -266,6 +359,9 @@ impl MinilinkClientHandler {
         println!("Authenticated successfully. Type messages below to log to the server:");
 
         while let Ok(Some(line)) = stdin_reader.next_line().await {
+            print!("msg> ");
+            let _ = std::io::stdout().flush();
+
             let mut payload = line.trim().to_string();
             payload.push('\n');
 

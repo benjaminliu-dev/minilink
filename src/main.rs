@@ -1,12 +1,9 @@
 pub mod network;
 
 use crate::network::{MinilinkClientHandler, MinilinkServerHandler};
-use serde::Deserializer;
 use serde_json::Value;
 use std::env;
 use std::fs;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_native_tls::native_tls::*;
 
 // Replace your main function block in src/main.rs with this:
 #[tokio::main]
@@ -61,8 +58,15 @@ async fn main() {
     } else {
         let entry_message: String = v["entry_message"].to_string();
         // Added password parameter
-        let client: MinilinkClientHandler =
-            MinilinkClientHandler::new(address, domain, pkcs12_path, der_path, password, entry_message).await;
+        let client: MinilinkClientHandler = MinilinkClientHandler::new(
+            address,
+            domain,
+            pkcs12_path,
+            der_path,
+            password,
+            entry_message,
+        )
+        .await;
         client.start().await;
     }
 }
