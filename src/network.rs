@@ -184,6 +184,7 @@ pub struct MinilinkClientHandler {
     pub server_domain: String,
     pub client_cert: Identity,
     pub server_ca_path: String,
+    pub entry_message: String
 }
 
 impl MinilinkClientHandler {
@@ -193,6 +194,7 @@ impl MinilinkClientHandler {
         client_p12_path: String,
         server_ca_path: String,
         password: String,
+        entry_message: String
     ) -> Self {
         let p12_der = fs::read(&client_p12_path).expect("Failed to read client .p12 file");
         let client_cert =
@@ -203,6 +205,7 @@ impl MinilinkClientHandler {
             server_domain,
             client_cert,
             server_ca_path,
+            entry_message
         }
     }
 
@@ -224,25 +227,20 @@ impl MinilinkClientHandler {
 
         let tcp_stream = TcpStream::connect(&self.server_address).await.unwrap();
 
-        // Complete the TLS Handshake
         let mut tls_stream = tls_connector
             .connect(&self.server_domain, tcp_stream)
             .await
             .unwrap();
         println!("Mutual TLS Handshake successful!");
 
-        // FIXED LOGIC BUG: Send the API key your server requires immediately
-        // before splitting the stream, otherwise the server hangs/drops connection.
         tls_stream
-            .write_all(b"CONNECTED")
+            .write_all(self.entry_message.as_bytes())
             .await
             .unwrap();
         tls_stream.flush().await.unwrap();
 
-        // FIXED COMPILATION BUG: Use tokio::io::split() cleanly on the TlsStream
         let (mut reader, mut writer) = io::split(tls_stream);
 
-        // Spawn background task to continuously print broadcasts coming from the server
         tokio::spawn(async move {
             let mut buffer = [0; 1024];
             loop {
@@ -263,7 +261,6 @@ impl MinilinkClientHandler {
             }
         });
 
-        // Keep the main loop alive to read local user stdin and send it to the server log
         let stdin = io::stdin();
         let mut stdin_reader = BufReader::new(stdin).lines();
         println!("Authenticated successfully. Type messages below to log to the server:");

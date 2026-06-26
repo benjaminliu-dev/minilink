@@ -59,9 +59,10 @@ async fn main() {
         .await;
         server.start().await;
     } else {
+        let entry_message: String = v["entry_message"].to_string();
         // Added password parameter
         let client: MinilinkClientHandler =
-            MinilinkClientHandler::new(address, domain, pkcs12_path, der_path, password).await;
+            MinilinkClientHandler::new(address, domain, pkcs12_path, der_path, password, entry_message).await;
         client.start().await;
     }
 }
