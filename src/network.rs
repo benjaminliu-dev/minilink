@@ -70,7 +70,7 @@ impl MinilinkServerHandler {
         let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
             TlsAcceptor::builder(self.cert.clone()).build().unwrap(),
         );
-        let (tx, _rx) = broadcast::channel::<String>(16);
+        let (tx, _rx) = broadcast::channel::<String>(256);
 
         // let connected_addresses = Arc::clone(&self.connected_addresses);
         // // let console_connected_addresses = Arc::clone(&connected_addresses);
