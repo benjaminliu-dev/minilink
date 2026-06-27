@@ -6,3 +6,4 @@
 *.der
 *.crt
 *.db
+.DS_Store
