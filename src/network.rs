@@ -9,6 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast};
 use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector};
+use chrono::{Utc};
 
 pub struct MinilinkServerHandler {
     pub address: String,
@@ -22,12 +23,12 @@ pub struct MinilinkServerHandler {
     pub users_db_path: String,
 }
 
-fn log(message: String, instant: Instant, address: &str, name: Option<&str>) -> String {
-    let elapsed = instant.elapsed().as_millis().to_string();
+fn log(message: String, address: &str, name: Option<&str>) -> String {
+    let time = Utc::now();
     if name.is_none() {
-        return format!("[{elapsed}]: {address}: {message}\n");
+        return format!("[{time}]: {address}: {message}\n");
     } else {
-        return format!("[{elapsed}]: {address}:{}: {message}\n", name.unwrap());
+        return format!("[{time}]: {address}:{}: {message}\n", name.unwrap());
     }
 }
 impl MinilinkServerHandler {
@@ -65,7 +66,6 @@ impl MinilinkServerHandler {
 
     pub async fn start(&self) {
         fs::write(&self.logfile_path, "MinilinkServer started\n").unwrap();
-        let start = Instant::now();
 
         let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
             TlsAcceptor::builder(self.cert.clone()).build().unwrap(),
@@ -178,7 +178,6 @@ impl MinilinkServerHandler {
                         .write_all(
                             log(
                                 format!("Accepted connection from {remote_addr}"),
-                                start,
                                 &remote_addr.to_string(),
                                 None,
                             )
@@ -203,7 +202,6 @@ impl MinilinkServerHandler {
                                 .write_all(
                                     log(
                                         format!("Mututal TLS Handshake successful with {remote_addr}"),
-                                        start,
                                         &remote_addr.to_string(),
                                         None,
                                     )
@@ -224,7 +222,6 @@ impl MinilinkServerHandler {
                                     .write_all(
                                         log(
                                             format!("TLS Accept error from {remote_addr}"),
-                                            start,
                                             &remote_addr.to_string(),
                                             None,
                                         )
@@ -260,7 +257,7 @@ impl MinilinkServerHandler {
                                     // Log clean disconnection
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), start, &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
+                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
                                         }
                                     }
 
@@ -317,7 +314,7 @@ impl MinilinkServerHandler {
                                     // Log the data received from the client
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(received.clone(), start, &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
+                                            let _ = file.write_all(log(received.clone(), &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
                                         }
                                     }
                                 }
