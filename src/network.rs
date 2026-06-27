@@ -2,7 +2,6 @@ use sqlite::State;
 use std::fs;
 use std::io::Write;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::fs::OpenOptions;
 use tokio::io;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
