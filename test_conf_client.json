@@ -8,5 +8,6 @@
   "log": true,
   "domain": "localhost",
   "password": "cs2060684",
-  "entry_message": "CLIENT_CONNECTED"
+  "entry_message": "CLIENT_CONNECTED",
+  "is_radio": false
 }

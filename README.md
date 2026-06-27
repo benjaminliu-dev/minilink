@@ -1,83 +1,76 @@
 # minilink
 
-minilink is a work-in-progress tactical datalink prototype for secure, point-to-point and relay-style message exchange over mutually authenticated TLS channels. The project is intended to explore a lightweight communication layer for local or lab-style networked operations, with an emphasis on simple message forwarding, identity handling, and server-side logging.
+minilink is a tactical datalink prototype for secure, point-to-point and relay-style message exchange over mutually authenticated TLS channels. It is intended as a lightweight experimental framework for local or lab-style networked operations, with a focus on simple message forwarding, identity handling, and server-side logging.
 
-## What it is
+## Overview
 
-At the moment, minilink provides a small experimental framework with:
+minilink supports two modes:
 
-- a TLS-based server that accepts client connections
-- a TLS-based client that connects to the server
-- basic multi-client message relay behavior
-- simple client naming via `setname` and `getname`
-- a server console with status and connection commands
-- optional logfile generation for operational traceability
+- server: accepts incoming TLS clients, tracks connected peers, relays messages, and exposes a small operator console
+- client: connects to the server over mutual TLS, sends messages, and receives relayed traffic from other peers
 
-This is not yet a production tactical communications stack. It is a compact engineering prototype for testing concepts such as session establishment, message propagation, operator visibility, and secure transport.
+It is a prototype and not a production communications stack.
 
-## Current capabilities
+## Features
 
-### Server features
+### Server
 
-- binds to a configurable address
-- accepts incoming TLS connections
-- tracks connected peers
-- relays messages from one connected client to other connected clients
-- stores per-client names for display and lookup
-- exposes a simple console for:
+- configurable listen address
+- accepts TLS client connections
+- tracks peers and client names
+- relays messages to other connected clients
+- operator console with commands:
   - `status`
   - `connections`
   - `help`
   - `save_log`
   - `exit`
 
-### Client features
+### Client
 
-- connects to the server over mutual TLS
-- sends messages to the server
-- receives relayed messages from other peers
-- displays a `msg>` prompt for interactive use
+- mutual TLS connection to the server
+- interactive `msg>` prompt
+- relays messages exchanged with other peers
+- supports lightweight identity setting via `setname`
 
 ## Project layout
 
-- `src/main.rs` — entrypoint, configuration loading, and mode selection
-- `src/network.rs` — TLS server/client implementation, message forwarding, name handling, console commands, and logging
+- `src/main.rs` — application entrypoint, configuration loading, and mode selection
+- `src/network.rs` — TLS server/client implementation, relay logic, command handling, and logging
 - `test_conf.json` — example server configuration
 - `test_conf_client.json` — example client configuration
-- `certificate.der` and `identity.p12` — sample identity material used by the current test setup
+- `certificate.der` and `identity.p12` — sample identity material for local testing
 
 ## Prerequisites
 
-You will need:
-
 - Rust toolchain (stable)
-- a working TLS certificate and private key in the formats expected by the app
+- a compatible TLS certificate and private key
 
-The repository currently ships with example files for local testing, but these should be treated as placeholders for development and experimentation.
+Example files are included for development and experimentation only.
 
-## Building
+## Build
 
-From the project root:
+From the repository root:
 
 ```bash
 cargo build
 ```
 
-## Running
+## Run
 
-The application expects three arguments:
+The application takes three arguments:
 
 ```bash
 cargo run -- <cfg_path> <der_path> <pkcs12_path>
 ```
 
-### Server example
+Example server startup:
 
 ```bash
 cargo run -- test_conf.json certificate.der identity.p12
 ```
 
-### Client example
+Example client startup:
 
 ```bash
 cargo run -- test_conf_client.json certificate.der identity.p12
@@ -85,7 +78,9 @@ cargo run -- test_conf_client.json certificate.der identity.p12
 
 ## Configuration
 
-The runtime configuration is loaded from JSON. A typical server config looks like this:
+Configuration is provided as JSON.
+
+Example server config:
 
 ```json
 {
@@ -95,11 +90,12 @@ The runtime configuration is loaded from JSON. A typical server config looks lik
   "logfile_path": "minilink.log",
   "log": true,
   "domain": "localhost",
-  "password": "your-password"
+  "password": "your-password",
+  "user_db_path": "users.db"
 }
 ```
 
-A typical client config looks like this:
+Example client config:
 
 ```json
 {
@@ -110,47 +106,41 @@ A typical client config looks like this:
   "log": true,
   "domain": "localhost",
   "password": "your-password",
-  "entry_message": "CLIENT_CONNECTED"
+  "entry_message": "CLIENT_CONNECTED",
+  "is_radio": false
 }
 ```
 
 ## Messaging behavior
 
-When one client sends a message, the server relays it to the other connected clients. The implementation also supports lightweight identity commands:
+Client messages are relayed by the server to all other connected clients. The server also tracks client names assigned with:
 
 ```text
 setname Alice
-getname Bob
 ```
 
-These names are stored on the server and used in console and message presentation.
+Those names are used for display and tracking.
 
 ## Logging
 
-If logging is enabled, minilink writes operational activity to the configured logfile path. The server console can also save the current logfile to a snapshot file using:
+When enabled, operational activity is written to the configured logfile path. The server console can snapshot the current log with:
 
 ```text
 save_log
 ```
 
-## Development status
+## Status
 
-minilink is currently in an early prototype stage. The focus is on validating the core interaction model:
+This repository is an early prototype. The current focus is on:
 
 - secure transport
 - message propagation
-- operator console behavior
+- operator visibility
 - identity tracking
 - simple event logging
 
-Future work may include:
-
-- richer message formats
-- better role and permission models
-- more robust connection lifecycle handling
-- packet framing and protocol versioning
-- operational hardening for field use
+Future enhancements may include richer message formats, permission models, lifecycle handling, protocol framing, and operational hardening.
 
 ## Notes
 
-This repository is best viewed as a research and development sandbox for tactical datalink-style communication concepts. It is useful for local testing, protocol exploration, and understanding how a lightweight relay architecture might behave under simple TLS-backed messaging conditions.
+minilink is designed as a research and development sandbox for tactical datalink concepts, local testing, and protocol exploration.

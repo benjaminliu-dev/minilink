@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use sqlite::State;
 use std::fs;
 use std::io::Write;
 use std::sync::Arc;
@@ -19,10 +19,11 @@ pub struct MinilinkServerHandler {
     pub log: bool,
     pub tcp_listener: TcpListener,
     pub connected_addresses: Arc<Mutex<Vec<String>>>,
+    pub users_db_path: String,
 }
 
 fn log(message: String, instant: Instant, address: &str, name: Option<&str>) -> String {
-    let elapsed = instant.elapsed().as_secs().to_string();
+    let elapsed = instant.elapsed().as_millis().to_string();
     if name.is_none() {
         return format!("[{elapsed}]: {address}: {message}\n");
     } else {
@@ -38,6 +39,7 @@ impl MinilinkServerHandler {
         logfile_path: String,
         log: bool,
         password: String,
+        users_db_path: String,
     ) -> Self {
         let der = std::fs::read(&p12_path).unwrap();
         let certificate = Identity::from_pkcs12(der.as_slice(), &password).unwrap();
@@ -57,6 +59,7 @@ impl MinilinkServerHandler {
             log,
             tcp_listener,
             connected_addresses: Arc::new(Mutex::new(Vec::new())),
+            users_db_path,
         }
     }
 
@@ -69,11 +72,35 @@ impl MinilinkServerHandler {
         );
         let (tx, _rx) = broadcast::channel::<String>(16);
 
-        let connected_addresses = Arc::clone(&self.connected_addresses);
-        let console_connected_addresses = Arc::clone(&connected_addresses);
-        let names = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-        let names_for_console = Arc::clone(&names);
+        // let connected_addresses = Arc::clone(&self.connected_addresses);
+        // // let console_connected_addresses = Arc::clone(&connected_addresses);
+        // let names = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+        // let names_for_console = Arc::clone(&names);
         let logfile_path_for_console = self.logfile_path.clone();
+        let db_path_for_console = self.users_db_path.clone();
+
+        let db_connection = Arc::new(Mutex::new(
+            sqlite::Connection::open(&db_path_for_console).expect("Failed to open database"),
+        ));
+
+        // Clone for console task
+        let db_connection_console = Arc::clone(&db_connection);
+
+        let start_query = "
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                address TEXT NOT NULL UNIQUE,
+                is_radio BOOL NOT NULL DEFAULT 0
+            );
+            DELETE FROM users;
+        ";
+
+        db_connection
+            .lock()
+            .await
+            .execute(start_query)
+            .expect("Failed to create users table");
 
         tokio::spawn(async move {
             let stdin = io::stdin();
@@ -86,25 +113,28 @@ impl MinilinkServerHandler {
                 match command {
                     "status" => println!("Server ok"),
                     "connections" => {
-                        let connections = console_connected_addresses.lock().await;
-                        let names_map = names_for_console.lock().await;
-                        let formatted = connections
-                            .iter()
-                            .map(|addr| {
-                                if let Some(name) = names_map.get(addr) {
-                                    format!("{addr}: {name}")
-                                } else {
-                                    addr.clone()
-                                }
-                            })
-                            .collect::<Vec<_>>();
-                        println!("{:?}", formatted)
-                    },
+                        let guard = db_connection_console.lock().await;
+                        let mut statement = guard
+                            .prepare("SELECT id, username, address, is_radio FROM users")
+                            .expect("Failed to prepare statement");
+
+                        while let Ok(State::Row) = statement.next() {
+                            let id: i64 = statement.read(0).unwrap();
+                            let username: String = statement.read(1).unwrap();
+                            let address: String = statement.read(2).unwrap();
+                            let is_radio: i64 = statement.read(3).unwrap();
+
+                            println!(
+                                "ID: {}, Username: {}, Address: {}, Is Radio: {}",
+                                id, username, address, is_radio
+                            );
+                        }
+                    }
                     "exit" => {
                         println!("Shutting down server...");
                         std::process::exit(0);
-                    },
-                    
+                    }
+
                     "help" => {
                         println!("Available commands:");
                         println!("status - Check server status");
@@ -112,7 +142,7 @@ impl MinilinkServerHandler {
                         println!("exit - Shut down the server");
                         println!("help - Show this help message");
                         println!("save_log - Save the current log to saved.log");
-                    },
+                    }
 
                     "save_log" => {
                         let src = logfile_path_for_console.clone();
@@ -121,7 +151,7 @@ impl MinilinkServerHandler {
                             println!("Log saved to saved.log");
                         });
                     }
-    
+
                     _ => println!("Unknown command: {}", command),
                 }
             }
@@ -134,11 +164,8 @@ impl MinilinkServerHandler {
             let tls_acceptor = tls_acceptor.clone();
             let broadcast_tx = tx.clone();
             let mut client_rx = broadcast_tx.subscribe();
-            let tracked_connections = Arc::clone(&connected_addresses);
-            let console_connections = Arc::clone(&connected_addresses);
-            let shared_names = Arc::clone(&names);
             let client_id = remote_addr.to_string();
-
+            let db_connection_client = Arc::clone(&db_connection);
             // Log incoming connection asynchronously before spawning the client task
             if should_log {
                 if let Ok(mut file) = OpenOptions::new()
@@ -149,8 +176,13 @@ impl MinilinkServerHandler {
                 {
                     let _ = file
                         .write_all(
-                            log(format!("Accepted connection from {remote_addr}"), start, &remote_addr.to_string(), None)
-                                .as_bytes(),
+                            log(
+                                format!("Accepted connection from {remote_addr}"),
+                                start,
+                                &remote_addr.to_string(),
+                                None,
+                            )
+                            .as_bytes(),
                         )
                         .await;
                 }
@@ -159,8 +191,26 @@ impl MinilinkServerHandler {
             tokio::spawn(async move {
                 let tls_stream = match tls_acceptor.accept(sock).await {
                     Ok(s) => {
-                        let mut connections = tracked_connections.lock().await;
-                        connections.push(remote_addr.to_string());
+                        db_connection_client.lock().await.execute(
+                            format!("INSERT OR IGNORE INTO users (username, address) VALUES ('{}', '{}')", client_id, remote_addr.to_string()).as_str()
+                        ).expect("Failed to insert user into database");
+                        if let Ok(mut file) = OpenOptions::new()
+                            .append(true)
+                            .open(&logfile_path_clone)
+                            .await
+                        {
+                            let _ = file
+                                .write_all(
+                                    log(
+                                        format!("Mututal TLS Handshake successful with {remote_addr}"),
+                                        start,
+                                        &remote_addr.to_string(),
+                                        None,
+                                    )
+                                    .as_bytes(),
+                                )
+                                .await;
+                        }
                         s
                     }
                     Err(_) => {
@@ -172,8 +222,13 @@ impl MinilinkServerHandler {
                             {
                                 let _ = file
                                     .write_all(
-                                        log(format!("TLS Accept error from {remote_addr}"), start, &remote_addr.to_string(), None)
-                                            .as_bytes(),
+                                        log(
+                                            format!("TLS Accept error from {remote_addr}"),
+                                            start,
+                                            &remote_addr.to_string(),
+                                            None,
+                                        )
+                                        .as_bytes(),
                                     )
                                     .await;
                             }
@@ -191,19 +246,27 @@ impl MinilinkServerHandler {
                             match read_result {
                                 Ok(0) => {
                                     let client_name = {
-                                        let names_map = shared_names.lock().await;
-                                        names_map.get(&client_id).cloned()
+                                        let guard = db_connection_client.lock().await;
+                                        let mut statement = guard.prepare(format!("SELECT username FROM users WHERE address = '{}'", remote_addr.to_string())).expect("Failed to prepare statement");
+                                        let mut username = String::new();
+
+                                        while let Ok(State::Row) = statement.next() {
+                                            username = statement.read::<String, _>(0).unwrap();
+                                        }
+
+                                        username
                                     };
+
                                     // Log clean disconnection
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), start, &remote_addr.to_string(), client_name.as_deref()).as_bytes()).await;
+                                            let _ = file.write_all(log(format!("Client {remote_addr} disconnected"), start, &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
                                         }
                                     }
+
                                     {
-                                        let address = remote_addr.to_string();
-                                        let mut connections = console_connections.lock().await;
-                                        connections.retain(|x| x != &address);
+                                        let guard = db_connection_client.lock().await;
+                                        guard.execute(format!("DELETE FROM users WHERE address = '{}'", remote_addr.to_string()).as_str()).expect("Failed to delete user from database");
                                     }
                                     return;
                                 }
@@ -211,22 +274,42 @@ impl MinilinkServerHandler {
                                     let received = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
                                     if let Some(name) = received.strip_prefix("setname ") {
-                                        let mut names_map = shared_names.lock().await;
-                                        names_map.insert(client_id.clone(), name.trim().to_string());
-                                        let _ = writer.write_all(log(format!("Name set to {name}"), start, &client_id, Some(name.trim())).as_bytes()).await;
+                                        let name_trimmed = name.trim();
+                                        let guard = db_connection_client.lock().await;
+                                        guard.execute(
+                                            format!("UPDATE users SET username = '{}' WHERE address = '{}'", name_trimmed, remote_addr.to_string()).as_str()
+                                        ).expect("Failed to update username in database");
+                                        let _ = writer.write_all(format!("Name set to {}\n", name_trimmed).as_bytes()).await;
                                         continue;
                                     }
 
-                                    if let Some(target) = received.strip_prefix("getname ") {
-                                        let names_map = shared_names.lock().await;
-                                        let target_name = names_map.get(target.trim()).cloned().unwrap_or_else(|| "unknown".to_string());
-                                        let _ = writer.write_all(log(format!("Name for {target}: {target_name}"), start, &client_id, None).as_bytes()).await;
+                                    if let Some(is_radio_str) = received.strip_prefix("setradio ") {
+                                        let is_radio_value = match is_radio_str.trim() {
+                                            "true" => 1,
+                                            "false" => 0,
+                                            _ => {
+                                                let _ = writer.write_all(b"Invalid value for setradio. Use 'true' or 'false'.\n").await;
+                                                continue;
+                                            }
+                                        };
+                                        let guard = db_connection_client.lock().await;
+                                        guard.execute(
+                                            format!("UPDATE users SET is_radio = {} WHERE address = '{}'", is_radio_value, remote_addr.to_string()).as_str()
+                                        ).expect("Failed to update is_radio in database");
+                                        let _ = writer.write_all(format!("is_radio set to {}\n", is_radio_value == 1).as_bytes()).await;
                                         continue;
                                     }
 
                                     let client_name = {
-                                        let names_map = shared_names.lock().await;
-                                        names_map.get(&client_id).cloned()
+                                        let guard = db_connection_client.lock().await;
+                                        let mut statement = guard.prepare(format!("SELECT username FROM users WHERE address = '{}'", remote_addr.to_string())).expect("Failed to prepare statement");
+                                        let mut username = String::new();
+
+                                        while let Ok(State::Row) = statement.next() {
+                                            username = statement.read::<String, _>(0).unwrap();
+                                        }
+
+                                        username
                                     };
 
                                     let broadcast_message = format!("{client_id}\t{received}");
@@ -234,28 +317,37 @@ impl MinilinkServerHandler {
                                     // Log the data received from the client
                                     if should_log {
                                         if let Ok(mut file) = OpenOptions::new().append(true).open(&logfile_path_clone).await {
-                                            let _ = file.write_all(log(received.clone(), start, &remote_addr.to_string(), client_name.as_deref()).as_bytes()).await;
+                                            let _ = file.write_all(log(received.clone(), start, &remote_addr.to_string(), Some(&client_name)).as_bytes()).await;
                                         }
                                     }
                                 }
                                 Err(_) => {
-                                    let address = remote_addr.to_string();
-                                    let mut connections = console_connections.lock().await;
-                                    connections.retain(|x| x != &address);
+                                    let guard = db_connection_client.lock().await;
+                                    guard.execute(format!("DELETE FROM users WHERE address = '{}'", remote_addr.to_string()).as_str()).expect("Failed to delete user from database");
                                     return;
                                 }
                             }
                         }
 
                         // Event B: Server broadcasts incoming client data to this client
+
                         broadcast_result = client_rx.recv() => {
                             if let Ok(msg) = broadcast_result {
                                 if let Some((sender, payload)) = msg.split_once('\t') {
                                     if sender == client_id {
                                         continue;
                                     }
-                                    let names_map = shared_names.lock().await;
-                                    let sender_name = names_map.get(sender).cloned().unwrap_or_else(|| sender.to_string());
+                                    let sender_name = {
+                                        let guard = db_connection_client.lock().await;
+                                        let mut statement = guard.prepare(format!("SELECT username FROM users WHERE address = '{}'", sender)).expect("Failed to prepare statement");
+                                        let mut username = sender.to_string();
+
+                                        while let Ok(State::Row) = statement.next() {
+                                            username = statement.read::<String, _>(0).unwrap();
+                                        }
+
+                                        username
+                                    };
                                     let forwarded = format!("{sender_name}: {payload}\n");
                                     if writer.write_all(forwarded.as_bytes()).await.is_err() {
                                         return;
@@ -276,6 +368,7 @@ pub struct MinilinkClientHandler {
     pub client_cert: Identity,
     pub server_ca_path: String,
     pub entry_message: String,
+    pub is_radio: bool,
 }
 
 impl MinilinkClientHandler {
@@ -286,6 +379,7 @@ impl MinilinkClientHandler {
         server_ca_path: String,
         password: String,
         entry_message: String,
+        is_radio: bool,
     ) -> Self {
         let p12_der = fs::read(&client_p12_path).expect("Failed to read client .p12 file");
         let client_cert =
@@ -297,6 +391,7 @@ impl MinilinkClientHandler {
             client_cert,
             server_ca_path,
             entry_message,
+            is_radio,
         }
     }
 

@@ -7,5 +7,6 @@
   "logfile_path": "minilink.log",
   "log": true,
   "domain": "localhost",
-  "password": "cs2060684"
+  "password": "cs2060684",
+  "user_db_path": "users.db"
 }

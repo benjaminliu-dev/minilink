@@ -41,7 +41,8 @@ async fn main() {
 
     // Extract the password from configuration. Fallback to empty string if missing.
     let password = v["password"].as_str().unwrap_or("").to_string();
-
+    let user_db_path = v["user_db_path"].as_str().unwrap_or("").to_string();
+    let is_radio = v["is_radio"].as_bool().unwrap_or(false);
     if is_server {
         // Added password parameter
         let server: MinilinkServerHandler = MinilinkServerHandler::new(
@@ -52,6 +53,7 @@ async fn main() {
             logfile_path,
             log,
             password,
+            user_db_path,
         )
         .await;
         server.start().await;
@@ -65,6 +67,7 @@ async fn main() {
             der_path,
             password,
             entry_message,
+            is_radio
         )
         .await;
         client.start().await;
