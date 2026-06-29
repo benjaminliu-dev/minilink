@@ -11,6 +11,7 @@ sqlite = "0.37.0"
 
 tokio = {version = "1.52.3", features = ["full"]}
 tokio-native-tls = "0.3.1"
+uuid = { version = "1.23", features = ["v4"] }
 
 
 [profile.release]
@@ -18,3 +19,4 @@ opt-level = 3          # Maximize speed optimizations
 lto = true             # Link-Time Optimization (merges and cleans code across crates)
 codegen-units = 1      # Reduces parallel compilation to find more optimizations 
 panic="unwind"
+debug = true

@@ -7,3 +7,6 @@
 *.crt
 *.db
 .DS_Store
+*.svg
+*.data*
+*gz

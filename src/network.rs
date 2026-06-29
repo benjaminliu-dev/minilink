@@ -86,8 +86,13 @@ impl MinilinkServerHandler {
         let db_connection_console = Arc::clone(&db_connection);
 
         let start_query = "
+
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA busy_timeout = 5000;
+
+
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 address TEXT NOT NULL UNIQUE,
                 is_radio BOOL NOT NULL DEFAULT 0
@@ -114,18 +119,17 @@ impl MinilinkServerHandler {
                     "connections" => {
                         let guard = db_connection_console.lock().await;
                         let mut statement = guard
-                            .prepare("SELECT id, username, address, is_radio FROM users")
+                            .prepare("SELECT username, address, is_radio FROM users")
                             .expect("Failed to prepare statement");
 
                         while let Ok(State::Row) = statement.next() {
-                            let id: i64 = statement.read(0).unwrap();
-                            let username: String = statement.read(1).unwrap();
-                            let address: String = statement.read(2).unwrap();
-                            let is_radio: i64 = statement.read(3).unwrap();
+                            let username: String = statement.read(0).unwrap();
+                            let address: String = statement.read(1).unwrap();
+                            let is_radio: i64 = statement.read(2).unwrap();
 
                             println!(
-                                "ID: {}, Username: {}, Address: {}, Is Radio: {}",
-                                id, username, address, is_radio
+                                "Username: {}, Address: {}, Is Radio: {}",
+                                username, address, is_radio
                             );
                         }
                     }

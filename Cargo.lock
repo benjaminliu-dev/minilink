@@ -236,6 +236,7 @@ dependencies = [
  "sqlite",
  "tokio",
  "tokio-native-tls",
+ "uuid",
 ]
 
 [[package]]
@@ -624,6 +625,17 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "uuid"
+version = "1.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
+dependencies = [
+ "getrandom",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "vcpkg"
