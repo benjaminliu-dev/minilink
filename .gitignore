@@ -5,7 +5,7 @@
 *.p12
 *.der
 *.crt
-*.db
+*.db*
 .DS_Store
 *.svg
 *.data*
