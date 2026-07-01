@@ -10,3 +10,4 @@
 *.svg
 *.data*
 *gz
+.idea

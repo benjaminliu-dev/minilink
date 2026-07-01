@@ -9,7 +9,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast};
 use tokio_native_tls::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector};
 use chrono::{Utc};
-
+// TODO: Replace is_radio with device_type (1: WiFi, 2: Radio, 3: Bluetooth)
+// TODO: Implement user logic for alternate device types using prefixes
 pub struct MinilinkServerHandler {
     pub address: String,
     pub blocked_addresses: Vec<String>,
