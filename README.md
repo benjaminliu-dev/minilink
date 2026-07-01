@@ -138,6 +138,7 @@ This repository is an early prototype. The current focus is on:
 - operator visibility
 - identity tracking
 - simple event logging
+- simple user management via a database
 
 Future enhancements may include richer message formats, permission models, lifecycle handling, protocol framing, and operational hardening.
 
